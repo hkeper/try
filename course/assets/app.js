@@ -3,7 +3,6 @@
   'use strict';
 
   const C = window.COURSE;
-  const STORE_KEY = 'ai-locator-course:v1';
   const MARK = { passed: '✓', flaky: '~', failed: '✗', todo: '○' };
   const VERDICT = {
     passed: 'passed — задание принято',
@@ -12,13 +11,10 @@
   };
 
   // ---------- хранилище прогресса (только в этом браузере) ----------
-  function load() {
-    try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch (e) { return {}; }
-  }
-  let state = load();
-  function save() {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) { /* без хранилища тоже работаем */ }
-  }
+  const Store = window.CourseStore;
+  const AI = window.CourseAI;
+  let state = Store.load();
+  function save() { Store.save(state); }
   function taskState(lessonId, taskId) {
     state[lessonId] = state[lessonId] || {};
     state[lessonId][taskId] = state[lessonId][taskId] || { answer: '', attempts: 0, history: [], status: null };
@@ -85,13 +81,8 @@
   function num(id) { return id.replace('lesson-', ''); }
 
   // ---------- Claude ----------
-  let sample = null;
-  let sampleBlocked = false;
-  const sampleReady = (window.claude && typeof window.claude.use === 'function')
-    ? window.claude.use('sample').then(s => { sample = s; refreshModeNotes(); return s; }).catch(() => null)
-    : Promise.resolve(null);
-
-  function canAsk() { return !!sample && !sampleBlocked; }
+  function canAsk() { return AI.mode() !== 'none'; }
+  AI.onChange(() => { refreshModeNotes(); renderSettings(); });
 
   function buildPrompt(lesson, task, answer, ts, forCopy) {
     const prev = ts.history.length ? ts.history[ts.history.length - 1] : null;
@@ -148,6 +139,11 @@
 
   const ERR = {
     not_granted: 'Проверка через Claude не разрешена для этой страницы. Можно скопировать запрос и спросить в чате.',
+    bad_key: 'API-ключ не принят. Проверь его в настройках проверки слева.',
+    forbidden: 'У ключа нет доступа к этой модели или закончились средства на балансе. Выбери другую модель или пополни баланс в console.anthropic.com.',
+    bad_request: 'API отклонил запрос. Попробуй другую модель в настройках проверки.',
+    network: 'Нет связи с API Anthropic. Проверь интернет и нажми ещё раз.',
+    no_provider: 'Проверка недоступна: открой курс на claude.ai или добавь свой API-ключ в настройках слева.',
     sampling_disabled: 'Claude недоступен для этого аккаунта. Скопируй запрос и спроси в чате.',
     rate_limited: 'Слишком много запросов подряд или исчерпан лимит. Подожди немного и нажми «Проверить» снова.',
     session_expired: 'Сессия claude.ai истекла — войди заново и повтори.',
@@ -156,7 +152,6 @@
     prompt_too_large: 'Ответ слишком длинный. Оставь только нужный фрагмент.',
     empty_completion: 'Пустой ответ от Claude. Нажми «Проверить» ещё раз.',
   };
-  const PERMANENT = ['not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed'];
 
   // ---------- рендер: навигация ----------
   function renderSide(currentId) {
@@ -175,7 +170,9 @@
       '<div class="brand"><a href="#home"><span class="name">AI-локатор<br>на Playwright</span>' +
       '<span class="sub">npx playwright test --ui</span></a>' +
       '<button class="btn small ghost menu-btn" id="menu-btn" aria-expanded="false" aria-controls="tree">Уроки</button></div>' +
-      '<nav class="tree" id="tree" aria-label="Уроки">' + mods + '</nav>';
+      '<nav class="tree" id="tree" aria-label="Уроки">' + mods + '</nav>' +
+      '<div class="ai-settings" id="ai-settings"></div>';
+    renderSettings();
     $('#menu-btn').onclick = () => {
       const open = side.classList.toggle('open');
       $('#menu-btn').setAttribute('aria-expanded', String(open));
@@ -362,17 +359,17 @@
       const answer = ta.value.trim();
       const out = $('[data-feedback]', root);
       if (!answer) { toast('Поле пустое — впиши ответ'); ta.focus(); return; }
-      await sampleReady;
+      await AI.ready;
       if (!canAsk()) {
         out.innerHTML = '<div class="feedback"><div class="verdict">Проверка через Claude здесь недоступна</div>' +
-          'Открой курс на claude.ai, будучи залогиненным, или нажми «Скопировать запрос для чата» и вставь его в любой чат с Claude.</div>';
+          'Добавь свой API-ключ Anthropic в настройках проверки слева, открой курс на claude.ai или нажми «Скопировать запрос для чата» и вставь его в любой чат с Claude.</div>';
         return;
       }
       btn.disabled = true;
       btn.textContent = 'Проверяю…';
       out.innerHTML = '<div class="feedback"><div class="thinking">Claude читает ответ. Обычно это 10–40 секунд.</div></div>';
       try {
-        const fb = await sample.json(buildPrompt(lesson, t, answer, ts, false), { cache: false });
+        const fb = await AI.json(buildPrompt(lesson, t, answer, ts, false));
         if (!fb || typeof fb !== 'object') throw { code: 'invalid_json' };
         ts.attempts += 1;
         ts.status = ['passed', 'flaky', 'failed'].includes(fb.status) ? fb.status : 'failed';
@@ -391,7 +388,6 @@
         renderSide(lesson.id);
       } catch (e) {
         const code = e && e.code;
-        if (PERMANENT.includes(code)) { sampleBlocked = true; refreshModeNotes(); }
         out.innerHTML = '<div class="feedback failed"><div class="verdict">Проверка не состоялась</div>' +
           esc(ERR[code] || 'Не удалось связаться с Claude. Нажми «Проверить» ещё раз чуть позже.') + '</div>';
       } finally {
@@ -469,9 +465,9 @@
     send.onclick = async () => {
       const q = ta.value.trim();
       if (!q) { toast('Сначала впиши вопрос'); ta.focus(); return; }
-      await sampleReady;
+      await AI.ready;
       if (!canAsk()) {
-        toast('Claude здесь недоступен — скопируй вопрос для чата');
+        toast('Claude недоступен: добавь API-ключ слева или скопируй вопрос для чата');
         return;
       }
       qa.turns.push({ role: 'user', content: q });
@@ -488,8 +484,7 @@
       const history = qa.turns.slice(-12);
       if (history[0].role !== 'user') history.shift();
       try {
-        const { text, truncated } = await sample([{ role: 'user', content: askRules(lesson) }, ...history], {
-          cache: false,
+        const { text, truncated } = await AI.chat([{ role: 'user', content: askRules(lesson) }, ...history], {
           signal: ctl.signal,
           onText: ({ text }) => { body.className = ''; body.innerHTML = richText(text); },
         });
@@ -498,7 +493,6 @@
         thread.innerHTML = qaTurnsHtml(qa);
       } catch (e) {
         const code = e && e.code;
-        if (PERMANENT.includes(code)) { sampleBlocked = true; refreshModeNotes(); }
         if (e && e.text) {
           qa.turns.push({ role: 'assistant', content: e.text + '\n\n(ответ прерван)' });
           save();
@@ -525,16 +519,50 @@
     chip.textContent = MARK[st] + ' ' + c.done + ' / ' + c.total + ' заданий';
   }
 
+  const MODE_NOTE = {
+    claudeai: 'Проверка идёт через твой аккаунт Claude: при первой проверке claude.ai спросит разрешение. Прогресс хранится только в этом браузере.',
+    key: 'Проверка идёт через твой API-ключ Anthropic, запросы оплачиваются с его баланса. Прогресс хранится только в этом браузере.',
+    none: 'Чтобы Claude проверял задания прямо здесь, добавь свой API-ключ Anthropic в настройках проверки слева. Без ключа нажимай «Скопировать запрос для чата» и вставляй его в любой чат с Claude. Прогресс хранится только в этом браузере.',
+  };
   function refreshModeNotes() {
-    document.querySelectorAll('[data-mode-note]').forEach(n => {
-      if (canAsk()) {
-        n.textContent = 'Проверка идёт через твой аккаунт Claude: при первой проверке claude.ai спросит разрешение. Прогресс хранится только в этом браузере.';
-      } else {
-        n.textContent = 'Автопроверка через Claude работает, когда курс открыт на claude.ai. Здесь можно нажать «Скопировать запрос для чата» и вставить его в любой чат с Claude. Прогресс хранится только в этом браузере.';
-      }
-    });
+    document.querySelectorAll('[data-mode-note]').forEach(n => { n.textContent = MODE_NOTE[AI.mode()]; });
   }
 
+  // ---------- настройки проверки в боковой панели ----------
+  function renderSettings() {
+    const box = document.getElementById('ai-settings');
+    if (!box) return;
+    const m = AI.mode();
+    const cfg = AI.getKeyConfig();
+    const label = m === 'claudeai' ? 'через claude.ai' : m === 'key' ? 'свой API-ключ' : 'не настроена';
+    const opts = AI.MODELS.map(x => '<option value="' + x.id + '"' + (x.id === cfg.model ? ' selected' : '') + '>' + esc(x.label) + '</option>').join('');
+    box.innerHTML =
+      '<details' + (box.dataset.open === '1' ? ' open' : '') + '><summary>Проверка: <strong>' + label + '</strong></summary>' +
+      (m === 'claudeai'
+        ? '<p>Курс открыт на claude.ai, ключ не нужен.</p>'
+        : '<p>Ключ создаётся в <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>. Он хранится только в этом браузере и уходит напрямую в API Anthropic. Лучше заведи отдельный ключ с лимитом расходов.</p>' +
+          '<label for="api-key">API-ключ</label>' +
+          '<input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="' + (cfg.hasKey ? 'ключ сохранён' : 'sk-ant-…') + '">' +
+          '<label for="api-model">Модель</label><select id="api-model">' + opts + '</select>' +
+          '<div class="actions"><button class="btn small primary" type="button" id="api-save">Сохранить</button>' +
+          (cfg.hasKey ? '<button class="btn small" type="button" id="api-forget">Удалить ключ</button>' : '') + '</div>') +
+      '</details>';
+    const det = box.querySelector('details');
+    det.addEventListener('toggle', () => { box.dataset.open = det.open ? '1' : ''; });
+    const saveBtn = document.getElementById('api-save');
+    if (saveBtn) saveBtn.onclick = () => {
+      const key = document.getElementById('api-key').value.trim();
+      const model = document.getElementById('api-model').value;
+      if (!key && !cfg.hasKey) { toast('Вставь ключ'); return; }
+      if (key && !/^sk-ant-/.test(key)) { toast('Ключ Anthropic начинается с sk-ant-'); return; }
+      box.dataset.open = '';
+      if (key) AI.setKeyConfig(key, model);
+      else AI.setModel(model);
+      toast('Сохранено');
+    };
+    const forget = document.getElementById('api-forget');
+    if (forget) forget.onclick = () => { AI.setKeyConfig(null); toast('Ключ удалён'); };
+  }
   // ---------- маршрутизация ----------
   function route() {
     const id = (location.hash || '').replace('#', '');

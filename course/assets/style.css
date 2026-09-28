@@ -374,3 +374,19 @@ th { font-weight: 600; color: var(--ink-2); font-size: 13px; }
 .qa-msg .thinking { color: var(--ink-2); font-style: italic; }
 
 .code-wrap pre { padding-top: 38px; }
+
+/* ---------- настройки проверки ---------- */
+.ai-settings { margin-top: 18px; padding: 12px 8px 0; border-top: 1px solid var(--line); font-size: 13px; color: var(--ink-2); }
+.ai-settings summary { cursor: pointer; }
+.ai-settings summary strong { color: var(--ink); font-weight: 500; }
+.ai-settings p { margin: 8px 0; line-height: 1.45; }
+.ai-settings label { display: block; margin: 8px 0 4px; font-size: 12px; color: var(--ink-3); }
+.ai-settings input, .ai-settings select {
+  width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); color: var(--ink); font: inherit; font-size: 13px;
+}
+.ai-settings input { font-family: var(--f-mono); }
+@media (max-width: 860px) {
+  .side .ai-settings { display: none; }
+  .side.open .ai-settings { display: block; }
+}
