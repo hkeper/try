@@ -355,3 +355,22 @@ th { font-weight: 600; color: var(--ink-2); font-size: 13px; }
   .feedback { animation: fade 180ms ease-out; }
   @keyframes fade { from { opacity: 0.4; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 }
+
+/* ---------- вопросы наставнику ---------- */
+.ask label { display: block; font-size: 13px; color: var(--ink-2); margin: 12px 0 6px; }
+.ask textarea {
+  width: 100%; min-height: 96px; resize: vertical;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface); color: var(--ink); font: inherit; line-height: 1.5;
+}
+.ask textarea:focus { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
+.qa-thread { display: grid; gap: 10px; }
+.qa-thread:empty { display: none; }
+.qa-msg { border-radius: 10px; padding: 10px 14px; font-size: 15px; max-width: 100%; overflow-wrap: anywhere; }
+.qa-msg.me { background: var(--accent-soft); justify-self: end; max-width: min(100%, 560px); }
+.qa-msg.bot { background: var(--surface); border: 1px solid var(--line); }
+.qa-who { font-family: var(--f-mono); font-size: 11px; color: var(--ink-3); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.06em; }
+.qa-msg pre { margin: 8px 0 0; }
+.qa-msg .thinking { color: var(--ink-2); font-style: italic; }
+
+.code-wrap pre { padding-top: 38px; }

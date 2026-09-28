@@ -234,13 +234,16 @@
           ? '<div class="callout">Урок пройден в чате, до появления этого сайта. Страница с заданиями для повторения будет добавлена.</div>'
           : '<div class="callout">Урок ещё не опубликован. Он появится здесь, когда до него дойдём: содержание пишется под то, что получилось в предыдущих уроках.</div>') +
         (lesson.outline ? '<h2>Что будет</h2><ul>' + lesson.outline.map(o => '<li>' + o + '</li>').join('') + '</ul>' : '') +
-        pager + '</div>';
+        askHtml(lesson) + pager + '</div>';
+      wireAsk(lesson);
+      refreshModeNotes();
       return;
     }
 
     const c = lessonCounts(lesson);
     const st = lessonStatus(lesson);
-    const steps = lesson.sections.map(s => '<li><a href="#' + lesson.id + '" data-jump="' + s.kind + '">' + esc(SECTION_KIND[s.kind] || s.title) + '</a></li>').join('');
+    const steps = lesson.sections.map(s => '<li><a href="#' + lesson.id + '" data-jump="' + s.kind + '">' + esc(SECTION_KIND[s.kind] || s.title) + '</a></li>').join('') +
+      '<li><a href="#' + lesson.id + '" data-jump="ask">вопросы наставнику</a></li>';
     const body = lesson.sections.map(s => {
       const tasks = (s.tasks || []).map(t => taskHtml(lesson, t)).join('');
       return '<section class="section" id="s-' + s.kind + '"><div class="section-kicker">' + esc(SECTION_KIND[s.kind] || '') + '</div>' +
@@ -254,7 +257,7 @@
       (lesson.time ? '<span class="chip">≈ ' + esc(lesson.time) + '</span>' : '') +
       (lesson.tag ? '<span class="chip">тег ' + esc(lesson.tag) + '</span>' : '') + '</div>' +
       '<div class="mode-note" data-mode-note></div>' +
-      '<ul class="steps">' + steps + '</ul>' + body + pager + '</div>';
+      '<ul class="steps">' + steps + '</ul>' + body + askHtml(lesson) + pager + '</div>';
 
     // подсветка и кнопки копирования для блоков кода
     document.querySelectorAll('#main pre > code').forEach(el => {
@@ -279,6 +282,7 @@
       if (target) target.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
     });
     allTasks(lesson).forEach(t => wireTask(lesson, t));
+    wireAsk(lesson);
     refreshModeNotes();
   }
 
@@ -393,6 +397,122 @@
       } finally {
         btn.disabled = false;
         btn.textContent = 'Проверить';
+      }
+    };
+  }
+
+  // ---------- вопросы наставнику в конце урока ----------
+  function lessonText(lesson) {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = (lesson.sections || []).map(s =>
+      '<h2>' + esc(s.title) + '</h2>' + (s.html || '') +
+      (s.tasks || []).map(t => '<p>Задание «' + esc(t.title) + '»: ' + t.prompt + '</p>').join('')
+    ).join('\n') + (lesson.outline ? '<p>План: ' + lesson.outline.join('; ') + '</p>' : '');
+    return tmp.textContent.replace(/\n{3,}/g, '\n\n').slice(0, 14000);
+  }
+  function askRules(lesson) {
+    return [
+      'Ты — наставник практического курса «AI-локатор на Playwright» (Node.js, TypeScript, Playwright Test, позже Claude API).',
+      'Ученик задаёт вопросы по уроку «' + lesson.title + '». Отвечай по-русски, по делу, как опытный коллега: объясни механизм, приведи короткий пример кода, если он помогает.',
+      'Если вопрос про задание урока — не выдавай готовое решение, веди подсказками. Если вопрос забегает в следующие уроки — ответь кратко и скажи, в каком уроке это будет.',
+      'Не выдумывай API: если не уверен в деталях конкретной версии, так и скажи и подскажи, где проверить (документация playwright.dev, --help).',
+      lesson.context ? 'Контекст урока: ' + lesson.context : '',
+      '',
+      'Материал урока:',
+      lessonText(lesson),
+    ].join('\n');
+  }
+  function qaState(lesson) {
+    state[lesson.id] = state[lesson.id] || {};
+    state[lesson.id].__qa = state[lesson.id].__qa || { turns: [], draft: '' };
+    return state[lesson.id].__qa;
+  }
+  function qaTurnsHtml(qa) {
+    return qa.turns.map(t => t.role === 'user'
+      ? '<div class="qa-msg me"><div class="qa-who">ты</div><div>' + richText(t.content) + '</div></div>'
+      : '<div class="qa-msg bot"><div class="qa-who">наставник</div><div>' + richText(t.content) + '</div></div>').join('');
+  }
+  function askHtml(lesson) {
+    const qa = qaState(lesson);
+    return '<section class="section ask" id="s-ask"><div class="section-kicker">вопросы наставнику</div>' +
+      '<h2>Остались вопросы?</h2>' +
+      '<p>Спроси что угодно по этому уроку: непонятное место в теории, ошибку в терминале, «а почему не так». Claude видит материал урока и отвечает с учётом него. Можно продолжать разговор уточнениями.</p>' +
+      '<div class="qa-thread" data-qa-thread>' + qaTurnsHtml(qa) + '</div>' +
+      '<label for="qa-' + lesson.id + '">Твой вопрос</label>' +
+      '<textarea id="qa-' + lesson.id + '" data-qa-input placeholder="Например: почему dotenv не перезаписывает переменные, которые уже есть в окружении?">' + esc(qa.draft) + '</textarea>' +
+      '<div class="actions">' +
+      '<button class="btn primary" type="button" data-qa-send>Спросить</button>' +
+      '<button class="btn" type="button" data-qa-stop hidden>Остановить</button>' +
+      '<button class="btn" type="button" data-qa-copy>Скопировать для чата</button>' +
+      '<button class="btn ghost small" type="button" data-qa-clear' + (qa.turns.length ? '' : ' hidden') + '>Очистить переписку</button>' +
+      '</div></section>';
+  }
+  function wireAsk(lesson) {
+    const root = document.getElementById('s-ask');
+    if (!root) return;
+    const qa = qaState(lesson);
+    const ta = $('[data-qa-input]', root), thread = $('[data-qa-thread]', root);
+    const send = $('[data-qa-send]', root), stop = $('[data-qa-stop]', root), clear = $('[data-qa-clear]', root);
+    let ctl = null, timer;
+    ta.addEventListener('input', () => { qa.draft = ta.value; clearTimeout(timer); timer = setTimeout(save, 400); });
+    ta.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') send.click(); });
+    stop.onclick = () => ctl && ctl.abort();
+    clear.onclick = () => {
+      qa.turns = []; save();
+      thread.innerHTML = ''; clear.hidden = true;
+    };
+    $('[data-qa-copy]', root).onclick = () => {
+      const q = ta.value.trim();
+      if (!q) { toast('Сначала впиши вопрос'); ta.focus(); return; }
+      copyText(askRules(lesson) + '\n\nВопрос ученика:\n' + q, ta);
+    };
+    send.onclick = async () => {
+      const q = ta.value.trim();
+      if (!q) { toast('Сначала впиши вопрос'); ta.focus(); return; }
+      await sampleReady;
+      if (!canAsk()) {
+        toast('Claude здесь недоступен — скопируй вопрос для чата');
+        return;
+      }
+      qa.turns.push({ role: 'user', content: q });
+      qa.draft = ''; ta.value = ''; save();
+      thread.innerHTML = qaTurnsHtml(qa);
+      const bubble = document.createElement('div');
+      bubble.className = 'qa-msg bot';
+      bubble.innerHTML = '<div class="qa-who">наставник</div><div class="thinking">Думаю… обычно 10–40 секунд.</div>';
+      thread.appendChild(bubble);
+      const body = bubble.lastChild;
+      send.disabled = true; stop.hidden = false;
+      ctl = new AbortController();
+      // держим последние 12 реплик, правила урока — всегда первой
+      const history = qa.turns.slice(-12);
+      if (history[0].role !== 'user') history.shift();
+      try {
+        const { text, truncated } = await sample([{ role: 'user', content: askRules(lesson) }, ...history], {
+          cache: false,
+          signal: ctl.signal,
+          onText: ({ text }) => { body.className = ''; body.innerHTML = richText(text); },
+        });
+        qa.turns.push({ role: 'assistant', content: text + (truncated ? '\n\n(ответ обрезан — спроси продолжение)' : '') });
+        save();
+        thread.innerHTML = qaTurnsHtml(qa);
+      } catch (e) {
+        const code = e && e.code;
+        if (PERMANENT.includes(code)) { sampleBlocked = true; refreshModeNotes(); }
+        if (e && e.text) {
+          qa.turns.push({ role: 'assistant', content: e.text + '\n\n(ответ прерван)' });
+          save();
+          thread.innerHTML = qaTurnsHtml(qa);
+        } else {
+          // вопрос без ответа возвращаем в поле, чтобы не терять
+          qa.turns.pop();
+          qa.draft = q; ta.value = q; save();
+          thread.innerHTML = qaTurnsHtml(qa);
+          if (code !== 'cancelled') toast(ERR[code] || 'Не удалось связаться с Claude. Попробуй чуть позже.');
+        }
+      } finally {
+        send.disabled = false; stop.hidden = true; ctl = null;
+        clear.hidden = !qa.turns.length;
       }
     };
   }
